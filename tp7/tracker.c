@@ -1,0 +1,120 @@
+/*
+ * tracker.c
+ *
+ * TP7 - ASR2 - ENS Lyon - L3IF - 2020-2021
+ * Tracking des pages soft-dirty d'un processus
+ */
+
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <errno.h>
+#include "tracker.h"
+
+long pagesize;
+
+int read_maps(int pid, struct region **out_regions, int *out_count) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/maps", pid);
+
+    FILE *f = fopen(path, "r");
+    if (!f) { perror("fopen maps"); return -1; }
+
+    int cap = 64, n = 0;
+    struct region *regs = malloc(cap * sizeof(*regs));
+    if (!regs) { fclose(f); return -1; }
+
+    char line[512];
+
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long start, end;
+        char perms[8] = {0};
+        char name[256] = {0};
+
+        int fields = sscanf(line,
+                            "%lx-%lx %7s %*s %*s %*s %255[^\n]",
+                            &start, &end, perms, name);
+        if (fields < 3) continue;
+        if (perms[0] != 'r') continue;
+
+        if (n >= cap) {
+            cap *= 2;
+            struct region *tmp = realloc(regs, cap * sizeof(*regs));
+            if (!tmp) { free(regs); fclose(f); return -1; }
+            regs = tmp;
+        }
+
+        regs[n].start = start;
+        regs[n].end   = end;
+
+        /* snprintf garantit toujours le '\0' final */
+        snprintf(regs[n].perms, sizeof(regs[n].perms), "%s", perms);
+
+        regs[n].name[0] = '\0';
+        if (fields >= 4) {
+            char *p = name;
+            while (*p == ' ') p++;
+            snprintf(regs[n].name, sizeof(regs[n].name), "%s", p);
+        }
+
+        n++;
+    }
+
+    fclose(f);
+    *out_regions = regs;
+    *out_count   = n;
+    return 0;
+}
+
+int open_pagemap(int pid) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/pagemap", pid);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) perror("open pagemap");
+    return fd;
+}
+
+int clear_soft_dirty(int pid) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/clear_refs", pid);
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) { perror("open clear_refs"); return -1; }
+
+    ssize_t w = write(fd, "4", 1);
+    if (w != 1) { perror("write clear_refs"); close(fd); return -1; }
+
+    close(fd);
+    return 0;
+}
+
+unsigned long scan_region(int fd, unsigned long start,
+                          unsigned long end, int print) {
+    unsigned long dirty = 0;
+
+    for (unsigned long va = start; va < end; va += (unsigned long)pagesize) {
+        off_t offset = (off_t)(va / (unsigned long)pagesize) * PAGEMAP_ENTRY_SIZE;
+
+        if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
+            perror("lseek");
+            return dirty;
+        }
+
+        uint64_t entry = 0;
+        ssize_t r = read(fd, &entry, PAGEMAP_ENTRY_SIZE);
+        if (r != PAGEMAP_ENTRY_SIZE) continue;
+
+        int present    = (entry >> 63) & 1;
+        int soft_dirty = (entry >> SOFT_DIRTY_BIT) & 1;
+
+        if (present && soft_dirty) {
+            if (print) printf("  0x%lx\n", va);
+            dirty++;
+        }
+    }
+
+    return dirty;
+}
