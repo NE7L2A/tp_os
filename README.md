@@ -54,12 +54,3 @@ Le fichier `tp9/resultat.txt` contient les sorties ou mesures du TP final.
 - Étudier l'allocation mémoire dynamique (`malloc` / `free`, gestion de tas)
 - Mettre en pratique des appels système bas niveau
 
-## 👤 Auteur
-
-- **NE7L2A** (dépôt GitHub : [NE7L2A](https://github.com/NE7L2A))
-- Cours : Systèmes d'Exploitation
-- Année universitaire : 2026–2027
-
-## 📄 Licence
-
-Ce dépôt est destiné à un usage pédagogique
